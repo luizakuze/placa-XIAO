@@ -52,5 +52,5 @@ Estação A                         Estação B
 ## Demonstração
 
 <p align="center">
-  <img src="./demo.gif" alt="Demonstração da comunicação Zigbee" width="600">
+  <img src="docs/demo.gif" alt="Demonstração da comunicação Zigbee" width="600">
 </p>
