@@ -13,7 +13,8 @@ Com isso, pretende-se apresentar conceitos básicos de Telecomunicações de for
 ## Estudos realizados
 
 - [Comunicação básica com Zigbee entre duas placas XIAO e interação](./com-zigbee/)
-  
+- [Testbed de desempenho: Wi-Fi vs ESP-NOW vs BLE vs Zigbee](./desempenho/)
+
 ## Documentação
 
 * [Seeed Studio (Documentação oficial)](https://wiki.seeedstudio.com/pt-br/)
