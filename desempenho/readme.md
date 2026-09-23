@@ -1,296 +1,375 @@
-# Testbed de Desempenho: Wi-Fi vs ESP-NOW vs BLE vs Zigbee
+# Testbed de desempenho: Wi-Fi vs ESP-NOW vs BLE vs Zigbee
 
-Este diretório monta um banco de testes (testbed) para comparar, na prática e
-com a mesma dupla de placas **XIAO ESP32-C6**, o desempenho das tecnologias de
-rádio que o chip oferece nativamente. A pergunta que o testbed responde é:
-*"para este projeto de telecomunicações, qual tecnologia sem fio faz mais
-sentido em cada cenário?"* - e a resposta vem de números medidos, não de
-folha de dados.
+Este diretório compara quatro tecnologias de comunicação disponíveis na **XIAO ESP32-C6** usando duas placas iguais:
 
-O método é o mesmo em todas as tecnologias: uma estação **A (iniciadora)**
-envia uma mensagem, uma estação **B (respondedora)** devolve o mesmo conteúdo
-imediatamente (eco), e A mede quanto tempo levou a ida-e-volta. É o mesmo
-princípio do comando `ping`, por isso chamamos de **ping-pong**.
+- **Estação A:** envia os pacotes e registra as métricas.
+- **Estação B:** recebe cada pacote e devolve o mesmo conteúdo.
 
-## Sumário
-
-- [Tecnologias comparadas](#tecnologias-comparadas)
-- [Metodologia](#metodologia)
-- [Métricas coletadas](#métricas-coletadas)
-- [Cenários de teste](#cenários-de-teste)
-- [Montagem física](#montagem-física)
-- [Configuração do Arduino IDE](#configuração-do-arduino-ide)
-- [Procedimento de execução](#procedimento-de-execução)
-- [Formato dos resultados](#formato-dos-resultados)
-- [Estrutura de pastas](#estrutura-de-pastas)
-- [Solução de problemas](#solução-de-problemas)
-- [Referências](#referências)
+Para executar os testes, consulte [`como-rodar.md`](./como-rodar.md). Este README descreve a metodologia, as métricas e o formato dos resultados.
 
 ## Tecnologias comparadas
 
-A XIAO ESP32-C6 tem **um único rádio de 2,4 GHz**, compartilhado no tempo
-entre Wi-Fi, Bluetooth LE e 802.15.4 (Zigbee/Thread) - por isso os testes
-rodam **uma tecnologia por vez**, cada uma com seu próprio par de sketches:
+A XIAO ESP32-C6 utiliza um único rádio de 2,4 GHz compartilhado entre Wi-Fi, Bluetooth LE e 802.15.4. Por isso, cada tecnologia é testada separadamente.
 
-| Tecnologia | Pasta | Camada usada | Topologia no teste | Por que comparar |
-|---|---|---|---|---|
-| **Wi-Fi** | [`wifi/`](./wifi/) | 802.11 (SoftAP + UDP) | A cria a rede (AP), B conecta como estação | O que a maioria já reconhece como "Wi-Fi"; mostra o custo de associação/IP/roteador embutido no protocolo |
-| **ESP-NOW** | [`espnow/`](./espnow/) | Radio Wi-Fi, sem associação | Broadcast direto, sem AP/IP | Mesmo rádio do Wi-Fi, mas "sem conexão" - bom contraponto para isolar o custo da pilha TCP/IP |
-| **BLE** | [`ble/`](./ble/) | Bluetooth 5 LE (GATT) | B anuncia, A conecta como central | Baixo consumo, payload pequeno, presente em praticamente todo celular |
-| **Zigbee** | [`zigbee/`](./zigbee/) | 802.15.4 / Zigbee 3.0 | B (end device) associado ao coordenador A | Malha, baixa taxa, foi o primeiro estudo deste repositório ([`../com-zigbee/`](../com-zigbee/)) |
+| Tecnologia | Pasta | Camada usada | Topologia no teste |
+|---|---|---|---|
+| **Wi-Fi** | [`wifi/`](./wifi/) | 802.11, SoftAP + UDP | A cria o AP e B conecta como estação |
+| **ESP-NOW** | [`espnow/`](./espnow/) | Rádio Wi-Fi sem associação/IP | Comunicação direta por broadcast |
+| **BLE** | [`ble/`](./ble/) | Bluetooth 5 LE, GATT | B anuncia e A conecta como central |
+| **Zigbee** | [`zigbee/`](./zigbee/) | 802.15.4 / Zigbee 3.0 | A é coordenador e B é end device |
 
-**Thread** (também 802.15.4, usado pelo Matter) roda no mesmo rádio e é
-suportado pelo chip, mas foi deixado de fora do testbed: a pilha OpenThread
-no Arduino-ESP32 exige um Border Router e configuração bem mais avançada que
-as demais, o que foge do escopo de um teste comparativo direto placa-a-placa.
-Fica como extensão futura.
-
-Números de datasheet (taxa de PHY teórica) não entram nesta tabela de
-propósito: 802.15.4 tem um teto de PHY conhecido (250 kbit/s), BLE 5 opera a
-1 ou 2 Mbit/s conforme o PHY negociado, e Wi-Fi 6 tem um teto muito mais alto
-- mas nenhum desses números é o que uma aplicação realmente consegue entregar
-em um microcontrolador. É exatamente isso que o testbed mede.
+O **Thread** também é suportado pelo ESP32-C6, mas não faz parte deste testbed. No Arduino-ESP32, o uso de OpenThread exige uma configuração mais complexa, incluindo Border Router, e não segue o mesmo modelo direto entre duas placas.
 
 ## Metodologia
 
-### Ping-pong sem sincronizar relógio
+### Ping-pong e RTT
 
-Cada teste segue a mesma lógica em A:
+Cada lote segue o mesmo fluxo:
 
-1. A grava `t0 = micros()` e envia um pacote/comando.
-2. B recebe e devolve o mesmo conteúdo (eco) o mais rápido possível.
+1. A registra `t0 = micros()` e envia um pacote.
+2. B recebe o pacote e devolve o mesmo conteúdo.
 3. A recebe a resposta e calcula `RTT = micros() - t0`.
-4. Repete `PING_COUNT` vezes (100 por padrão) antes de imprimir o resultado.
+4. O processo é repetido `PING_COUNT` vezes, 100 por padrão.
 
-Como o `t0` é gravado e conferido **sempre no relógio de A**, não é preciso
-sincronizar os relógios das duas placas - o mesmo truque usado pelo `ping`
-tradicional. B não faz nenhuma medição; só ecoa.
+O RTT é medido apenas com o relógio da estação A. Não é necessário sincronizar as duas placas.
 
-Em Wi-Fi, ESP-NOW e BLE, o pacote carrega um cabeçalho próprio (número de
-sequência + timestamp) e é preenchido até o tamanho de payload sendo testado
-naquele momento. Em Zigbee, o "payload" é o próprio estado ON/OFF do cluster
-(1 bit) - o cluster On/Off não foi feito para carregar um payload de bytes
-livre, então o teste Zigbee mede **latência**, não variação de tamanho de
-payload (ver comentários em [`zigbee/estacao_a.ino`](./zigbee/estacao_a.ino)).
+Os testes usam transporte **best-effort** na camada medida: UDP no Wi-Fi, broadcast no ESP-NOW, GATT Write No Response no BLE e comando ZCL direto no Zigbee. Não há retransmissão implementada pelo benchmark para mascarar perdas.
 
-Em todas as tecnologias o transporte usado é **best-effort** (sem
-confirmação/retransmissão automática na camada que estamos medindo: UDP,
-broadcast ESP-NOW, GATT Write No Response e o comando ZCL direto) - então a
-"perda de pacotes" reportada é uma característica real de cada tecnologia
-naquele cenário, não um artefato do teste.
+### Parâmetros mantidos iguais
 
-### O que o teste NÃO mede
+| Parâmetro | Valor | Observação |
+|---|---:|---|
+| `PING_COUNT` | 100 | Mesmo número de tentativas por lote |
+| `PING_TIMEOUT_MS` | 1000 ms | Mesmo critério para considerar um pacote perdido |
+| `RSSI_SAMPLE_EVERY` | 10 | Uma leitura de RSSI a cada 10 pings |
+| Payload de referência | 16 bytes | Tamanho suportado pelas quatro tecnologias |
+| Início do RTT | Antes do envio | `micros()` é lido imediatamente antes do pacote ser enviado |
+| Estatísticas | Mesmo código | `recordRtt()` e `computePercentiles()` são equivalentes nos quatro testes |
 
-- **Vazão saturada/pipelinada** (estilo `iperf`, várias mensagens em voo ao
-  mesmo tempo). Como o ping-pong espera cada resposta antes de mandar a
-  próxima, o número de "vazão" no resultado é uma vazão *limitada pelo RTT*
-  - útil para comparar as quatro tecnologias entre si, mas não é o máximo
-  teórico de cada uma.
-- **Consumo de energia** de forma instrumentada. Se houver um multímetro ou
-  medidor de corrente USB disponível, ele pode ser inserido em série com a
-  alimentação da estação B durante qualquer um dos cenários abaixo - é um
-  bom complemento opcional, mas não faz parte do firmware.
+O timeout de 1000 ms é mantido igual em todas as tecnologias para que PDR e perda sejam comparáveis.
+
+## Payloads
+
+### Definição de `payload_bytes`
+
+`payload_bytes` representa apenas o **payload de aplicação**. Campos usados pela instrumentação, como número de sequência, timestamp e identificadores internos, não entram nesse valor.
+
+Assim, `payload_bytes = 16` significa 16 bytes de dados de aplicação em todas as tecnologias.
+
+| Tecnologia | Cabeçalho interno | Motivo |
+|---|---:|---|
+| ESP-NOW | 10 B | Inclui identificação da equipe em broadcast |
+| Wi-Fi | 9 B | A associação ao AP identifica o par; permanece o campo de tipo |
+| BLE | 8 B | A conexão GATT e a characteristic identificam o canal |
+| Zigbee | 8 B | O binding e o `custom_cmd_id` identificam a comunicação |
+
+### Tamanhos testados
+
+| Tecnologia | Payloads testados | Limite utilizado |
+|---|---|---|
+| Zigbee | 16, 32 | Limite do quadro 802.15.4 após os cabeçalhos das camadas |
+| ESP-NOW | 16, 32, 100, 200 | Limite do protocolo |
+| BLE | 16, 32, 100, 200 | Dependente da MTU negociada, normalmente até 247 |
+| Wi-Fi | 16, 32, 100, 200, 512, 1200 | Mantido abaixo do MTU usado no teste para evitar fragmentação |
+
+Para comparar tecnologias entre si, use apenas os payloads presentes em todas elas. O [`analisar_resultados.py`](./ferramentas/analisar_resultados.py) calcula essa interseção automaticamente.
 
 ## Métricas coletadas
 
-Cada iniciador (`estacao_a.ino`) imprime uma linha `RESULT,...` por lote de
-teste, sempre com as mesmas colunas:
+Cada `estacao_a.ino` imprime uma linha `RESULT,...` para cada lote.
 
 | Coluna | Significado |
 |---|---|
-| `tech` | Tecnologia testada (`WIFI`, `ESPNOW`, `BLE`, `ZIGBEE`) |
-| `payload_bytes` | Tamanho do pacote de aplicação, em bytes (fixo em `1` para Zigbee) |
-| `sent` | Quantos pings foram enviados |
-| `received` | Quantos ecos voltaram dentro do timeout |
-| `loss_pct` | Percentual de perda: `(sent - received) / sent` |
-| `rtt_min_ms` / `rtt_avg_ms` / `rtt_max_ms` | Latência de ida-e-volta: mínima, média e máxima |
-| `rtt_stddev_ms` | Desvio padrão do RTT (quanto maior, mais "instável"/com jitter é o enlace) |
-| `throughput_kbps` | Vazão efetiva limitada por RTT (`NA` para Zigbee - ver metodologia) |
+| `tech` | Tecnologia testada: `WIFI`, `ESPNOW`, `BLE` ou `ZIGBEE` |
+| `payload_bytes` | Payload de aplicação em bytes |
+| `sent` | Número de pings enviados |
+| `received` | Número de respostas recebidas dentro do timeout |
+| `loss_pct` | Percentual de perda |
+| `pdr_pct` | Packet Delivery Ratio |
+| `rtt_min_ms` | Menor RTT |
+| `rtt_avg_ms` | RTT médio |
+| `rtt_max_ms` | Maior RTT |
+| `rtt_stddev_ms` | Desvio padrão do RTT |
+| `rtt_p50_ms` | Percentil 50 do RTT |
+| `rtt_p90_ms` | Percentil 90 do RTT |
+| `rtt_p95_ms` | Percentil 95 do RTT |
+| `rtt_p99_ms` | Percentil 99 do RTT |
+| `throughput_kbps` | Goodput do fluxo ping-pong |
+| `rssi_avg_dbm` | RSSI médio do lote |
+| `rssi_min_dbm` | Pior RSSI registrado no lote |
+| `rssi_amostras` | Número de leituras usadas no cálculo do RSSI |
 
-## Cenários de teste
+### RSSI
 
-Rode os quatro sketches-A/B em cada cenário abaixo e anote os resultados
-(veja [Formato dos resultados](#formato-dos-resultados)). Sugestão de ordem:
-do mais controlado para o mais realista.
+O RSSI é coletado a cada 10 pings e permite relacionar qualidade de sinal com PDR e perda.
 
-1. **Baseline (linha de visada, curta distância).** As duas placas a ~1 m,
-   sem obstáculos, sem outras redes por perto. Estabelece o "melhor caso" de
-   cada tecnologia.
-2. **Alcance.** Aumente a distância em degraus (ex.: 5 m, 10 m, 20 m, 30 m)
-   até a taxa de perda ficar alta ou o link cair. Anote a distância em que
-   cada tecnologia deixa de ser confiável (ex.: perda > 20%).
-3. **Obstáculos.** Na distância do baseline, repita com 1 parede e depois
-   2 paredes (ou um andar) entre as placas. Zigbee e BLE costumam sofrer
-   menos que Wi-Fi/ESP-NOW em obstáculos densos por operarem com potência e
-   taxa menores, mas isso é exatamente o que este cenário verifica.
-4. **Tamanho de payload.** Já é automático dentro de cada sketch de
-   Wi-Fi/ESP-NOW/BLE (eles alternam sozinhos entre os tamanhos definidos em
-   `PAYLOAD_SIZES`). Vale comparar como o `throughput_kbps` cresce (ou não)
-   com payloads maiores em cada tecnologia.
-5. **Interferência / múltiplas equipes.** Se houver mais de uma dupla de
-   placas testando ao mesmo tempo na mesma sala (comum em um evento de
-   divulgação com várias bancadas), rode o mesmo cenário de baseline com
-   1, 2 e 3 duplas ativas simultaneamente e compare a degradação. Lembre-se
-   de mudar `TEAM_ID`/SSID/nome anunciado de cada dupla (ver
-   [Solução de problemas](#solução-de-problemas)) para não misturar os
-   pings de duplas diferentes.
-6. **(Opcional) Consumo de energia.** Com um medidor de corrente USB entre a
-   fonte e a estação B, compare a corrente média em repouso e durante o
-   teste de cada tecnologia.
+A leitura é feita depois do RTT do ping correspondente. O tempo gasto para obter o RSSI é descontado do cálculo de goodput.
+
+| Tecnologia | Fonte do RSSI |
+|---|---|
+| Wi-Fi | `esp_wifi_ap_get_sta_list()` |
+| ESP-NOW | `rx_ctrl->rssi` no callback de recepção |
+| BLE | `BLEClient::getRssi()` |
+| Zigbee | `esp_zb_nwk_get_next_neighbor()` |
+
+### Memória
+
+A estação A registra o heap livre em três momentos:
+
+1. Antes de inicializar o rádio.
+2. Depois de inicializar a pilha de comunicação.
+3. Depois de estabelecer o enlace com B.
+
+Também é registrado `ESP.getMinFreeHeap()`.
+
+Essas medições são feitas uma vez por boot. Para medir variabilidade de memória, são necessários boots independentes.
+
+### Tempo de estabelecimento do enlace
+
+Após o link ficar pronto, a estação A imprime:
+
+```text
+LINKSETUP,<tech>,<ms>
+```
+
+O valor corresponde ao tempo desde o início do `setup()` até o enlace estar pronto para uso.
+
+| Tecnologia | Critério de link pronto |
+|---|---|
+| Wi-Fi | B envia o `HELLO` UDP e A aprende IP e porta de B |
+| ESP-NOW | A recebe uma resposta válida de B |
+| BLE | `connect()` GATT e resolução de serviço/characteristics concluídos |
+| Zigbee | End device associado e vinculado ao coordenador |
+
+A linha de memória é:
+
+```text
+MEMORY,<tech>,<heap_antes_radio>,<heap_pos_radio>,<heap_pos_link>,<custo_radio_bytes>,<custo_link_bytes>,<min_free_heap>
+```
+
+`LINKSETUP` e `MEMORY` aparecem uma vez por boot. A ferramenta de captura associa esses valores às linhas `RESULT` da mesma sessão.
+
+## Limitações do teste
+
+Os resultados devem ser interpretados com estas restrições:
+
+- `throughput_kbps` representa **goodput do fluxo ping-pong**, não vazão máxima do rádio. O teste é stop-and-wait.
+- RSSI x PDR representa qualidade de enlace observada. Não é uma medição de sensibilidade de receptor em laboratório.
+- `ESP.getFreeHeap()` mede o custo dinâmico de heap. Memória estática e global deve ser analisada separadamente a partir do uso de memória informado na compilação.
+- A configuração de segurança não é equivalente entre Wi-Fi, ESP-NOW, BLE e Zigbee.
+- Consumo de energia não é medido por este firmware.
+
+Para medir vazão máxima seria necessário um teste separado, com transmissão contínua em uma direção e contagem de bytes em uma janela fixa.
+
+## Protocolo de coleta
+
+Mantenha posição, orientação, alimentação, canal e ambiente o mais constantes possível. Use `--observacoes` para registrar diferenças relevantes entre execuções.
+
+### A. Baseline
+
+- Distância: 1 m.
+- Obstáculo: nenhum.
+- 5 repetições por tecnologia.
+- Cada repetição executa todos os payloads suportados pela tecnologia.
+
+### B. Distância
+
+- Distâncias mínimas: 1 m e 5 m.
+- Adicionar 10 m se o ambiente permitir.
+- Sem obstáculo.
+- 5 repetições por distância e tecnologia.
+- Para comparação direta, usar principalmente o payload de 16 bytes.
+
+### C. Barreiras
+
+- Manter a distância fixa, por exemplo 5 m.
+- Testar sem obstáculo, com uma parede e outras barreiras de interesse.
+- 5 repetições por condição e tecnologia.
+- Usar 16 bytes como referência para PDR e RSSI.
+
+### D. Memória e link setup
+
+`LINKSETUP` e `MEMORY` são medidos uma vez por boot. Pressionar `r` cria uma nova repetição do benchmark, mas não uma nova medição de memória ou estabelecimento do enlace.
+
+Para essas duas métricas, use pelo menos **5 boots independentes por tecnologia**. Cada nova execução do script de captura corresponde a uma nova sessão.
+
+### Quantidade de pacotes
+
+Cada payload usa 100 pings. Com 5 repetições, cada condição terá 500 tentativas por payload.
+
+### Interferência opcional
+
+Para avaliar interferência entre grupos, execute o baseline com 1, 2 e 3 duplas ativas ao mesmo tempo.
+
+Ao usar mais de uma dupla, configure identificadores diferentes:
+
+- `TEAM_ID` no ESP-NOW.
+- `WIFI_SSID` no Wi-Fi.
+- `DEVICE_NAME` no BLE.
 
 ## Montagem física
 
-Boa notícia: **nenhuma solda, botão ou LED extra é necessário** para estes
-testes (diferente do estudo interativo em [`../com-zigbee/`](../com-zigbee/),
-que usa D1/D2). O benchmark roda só com firmware + Monitor Serial.
+Não é necessário adicionar botão, LED ou circuito externo.
 
-Para cada cenário:
+Material recomendado:
 
-1. **Duas placas XIAO ESP32-C6** e dois cabos USB-C **com linhas de dados**
-   (alguns cabos são só de alimentação - se a porta não aparecer no
-   computador, troque o cabo antes de qualquer outra coisa).
-2. **Estação A (iniciadora)** fica ligada por USB a um computador, para você
-   acompanhar os resultados pelo Monitor Serial (115200 baud).
-3. **Estação B (respondedora)** pode ficar:
-   - ligada por USB em outra porta do mesmo computador (mais fácil para o
-     baseline, e permite ver os logs dela também), ou
-   - alimentada por um power bank USB, ou
-   - alimentada por uma bateria LiPo 3,7 V no conector `BAT+`/`BAT-` da
-     placa (ver [`../com-zigbee/docs/pinagem-verso.png`](../com-zigbee/docs/pinagem-verso.png))
-     - útil justamente para os cenários de alcance/obstáculo, em que B
-     precisa se afastar do computador.
-4. Para o cenário de alcance, use uma trena ou marcações no chão para manter
-   as distâncias consistentes entre uma tecnologia e outra.
-5. Mantenha as placas na mesma orientação entre os testes (a antena da XIAO
-   ESP32-C6 fica em uma ponta da placa - ver
-   [`../com-zigbee/docs/pinagem-frente.png`](../com-zigbee/docs/pinagem-frente.png)).
-   Isso não muda o resultado absoluto, mas mantém os testes comparáveis entre
-   si.
-6. Ao trocar de tecnologia, é só regravar os dois sketches daquela pasta nas
-   mesmas duas placas - não precisa de hardware diferente.
+1. Duas placas **XIAO ESP32-C6**.
+2. Cabo USB-C com dados para a estação conectada ao computador.
+3. Alimentação estável para a segunda placa.
+4. Hub USB se o computador tiver poucas portas.
+5. Trena ou marcações no chão para manter as distâncias.
+6. Identificação física das placas como A e B.
 
-Dica: cole um pedaço de fita com "A" e "B" em cada placa durante a sessão de
-testes, já que o papel de cada uma muda conforme a pasta (iniciadora vs.
-respondedora), diferente da convenção coordenador/end device do estudo
-Zigbee interativo.
+Mantenha a mesma orientação das placas em todos os testes. A posição da antena pode ser consultada em [`../com-zigbee/docs/pinagem-frente.png`](../com-zigbee/docs/pinagem-frente.png).
+
+Para testes de alcance, a estação B pode ser alimentada por bateria LiPo 3,7 V no conector `BAT+`/`BAT-`. Consulte [`../com-zigbee/docs/pinagem-verso.png`](../com-zigbee/docs/pinagem-verso.png).
+
+Nos testes realizados durante o desenvolvimento, alimentação por carregador de parede ou power bank apresentou instabilidade em alguns casos. Se B parar de responder durante transmissão, teste com alimentação USB mais estável ou hub USB.
 
 ## Configuração do Arduino IDE
 
-Todas as tecnologias usam a mesma placa (`XIAO_ESP32C6`, pacote **esp32 by
-Espressif Systems**, testado aqui na versão **3.3.11**). Wi-Fi, ESP-NOW e BLE
-já vêm inclusos no pacote da placa - não é preciso instalar nenhuma
-biblioteca extra.
+Todos os testes usam a placa `XIAO_ESP32C6` com o pacote **esp32 by Espressif Systems**, testado na versão **3.3.11**.
 
-| | Estação A | Estação B |
+Wi-Fi, ESP-NOW e BLE não exigem biblioteca adicional.
+
+| Tecnologia | Estação A | Estação B |
 |---|---|---|
-| **Wi-Fi** | Board: XIAO_ESP32C6 (configuração padrão) | Board: XIAO_ESP32C6 (configuração padrão) |
-| **ESP-NOW** | Board: XIAO_ESP32C6 (configuração padrão) | Board: XIAO_ESP32C6 (configuração padrão) |
-| **BLE** | Board: XIAO_ESP32C6 (configuração padrão) | Board: XIAO_ESP32C6 (configuração padrão) |
-| **Zigbee** | Board: XIAO_ESP32C6 · Tools → Zigbee Mode: **Zigbee ZCZR** · Partition Scheme: **Zigbee ZCZR 4MB with spiffs** · Erase All Flash Before Sketch Upload: **Enabled** | Board: XIAO_ESP32C6 · Tools → Zigbee Mode: **Zigbee ED** · Partition Scheme: **Zigbee 4MB with spiffs** · Erase All Flash Before Sketch Upload: **Enabled** |
+| Wi-Fi / ESP-NOW / BLE | `XIAO_ESP32C6`, configuração padrão | `XIAO_ESP32C6`, configuração padrão |
+| Zigbee | Zigbee Mode: **ZCZR**; Partition Scheme: **Zigbee ZCZR 4MB with spiffs**; Erase All Flash Before Sketch Upload: **Enabled** | Zigbee Mode: **ED**; Partition Scheme: **Zigbee 4MB with spiffs**; Erase All Flash Before Sketch Upload: **Enabled** |
 
-As opções de Zigbee são as mesmas já documentadas em
-[`../com-zigbee/readme.md`](../com-zigbee/readme.md).
+Os oito sketches compilam com essa configuração. Alcance, MTU negociada e estabilidade do binding Zigbee devem ser validados nos testes reais.
 
-> Todos os oito sketches deste diretório foram compilados com sucesso contra
-> este exato pacote (`esp32:esp32:XIAO_ESP32C6`, core 3.3.11) antes de serem
-> adicionados ao repositório. O que **não** foi validado aqui é o
-> comportamento em rádio real (RF) - alcance, MTU negociado, robustez do
-> binding Zigbee etc. - já que isso depende do hardware físico e do
-> ambiente, exatamente o que este testbed existe para medir.
+## Coleta dos resultados
 
-## Procedimento de execução
+Os resultados podem ser gravados automaticamente ou preenchidos manualmente.
 
-Para cada tecnologia (pasta `wifi/`, `espnow/`, `ble/` ou `zigbee/`):
+### Captura automática
 
-1. Abra `estacao_a.ino` no Arduino IDE. Se aparecer um aviso pedindo para
-   mover o arquivo para uma pasta de mesmo nome, aceite (é uma exigência do
-   Arduino IDE para sketches avulsos).
-2. Ajuste as configurações de Tools de acordo com a tabela acima e grave na
-   placa que será a **estação A**.
-3. Repita para `estacao_b.ino` na segunda placa (**estação B**), com as
-   configurações de B.
-4. Ligue **as duas placas juntas** (todo protocolo de descoberta - HELLO do
-   Wi-Fi, broadcast do ESP-NOW, scan do BLE, binding do Zigbee - começa do
-   zero a cada boot; ligar uma muito antes da outra só faz esperar mais, não
-   quebra nada, mas religar as duas juntas evita confusão).
-5. Abra o Monitor Serial da **estação A** a 115200 baud. Acompanhe as
-   mensagens de descoberta ("Waiting for Station B...", "Scanning...",
-   etc.) até aparecer "Link ready" ou "Connected".
-6. O benchmark começa sozinho alguns segundos depois do link ficar pronto e
-   imprime uma linha `RESULT,...` por tamanho de payload testado.
-7. Ao final ("Benchmark complete"), posicione as placas no próximo cenário
-   e envie `r` + Enter pelo Monitor Serial da estação A para rodar de novo -
-   não precisa resetar nem regravar nada entre repetições no mesmo cenário.
-8. Copie as linhas `RESULT,...` para a planilha de resultados (ver abaixo)
-   antes de mudar de cenário.
+O script [`ferramentas/capturar_serial.py`](./ferramentas/capturar_serial.py):
 
-## Formato dos resultados
+- conecta à serial da estação A;
+- interpreta `RESULT`, `LINKSETUP` e `MEMORY`;
+- adiciona data, hora, sessão, repetição e informações do cenário;
+- grava os dados em CSV;
+- mantém o terminal interativo para comandos como `r` + Enter.
 
-Cada linha `RESULT,...` impressa por A já está pronta em CSV, mas não sabe
-em que cenário físico ela foi gerada - isso só quem está com as placas na
-mão sabe. Use [`resultados/template.csv`](./resultados/template.csv) como
-ponto de partida: copie o arquivo (ex.: `resultados/2026-09-14.csv`) e, para
-cada linha `RESULT,...`, preencha também `data`, `cenario` (ex.:
-`baseline`, `alcance-10m`, `obstaculo-2paredes`), `distancia_m`, `obstaculo`
-e `observacoes`.
+Instalação e execução:
 
-Com os CSVs preenchidos, qualquer planilha consegue montar gráficos
-comparando as quatro tecnologias por cenário - por exemplo, RTT médio vs.
-distância, ou perda de pacotes vs. número de equipes simultâneas.
+```bash
+pip install pyserial
+python3 ferramentas/capturar_serial.py --cenario baseline --distancia 1 --obstaculo nenhum
+```
+
+Sem `--port`, o script tenta identificar automaticamente qual porta corresponde à estação A. Para definir manualmente:
+
+```bash
+python3 ferramentas/capturar_serial.py --port /dev/ttyACM0 --cenario baseline --distancia 1 --obstaculo nenhum
+```
+
+Se `--distancia`, `--obstaculo` ou `--observacoes` não forem informados, o script solicita os valores durante a execução.
+
+### Captura manual
+
+Use [`resultados/template.csv`](./resultados/template.csv) como modelo.
+
+Como `LINKSETUP` e `MEMORY` aparecem apenas uma vez por boot, repita esses valores nas linhas `RESULT` da mesma sessão.
+
+### Colunas de contexto
+
+| Coluna | Significado |
+|---|---|
+| `data` / `hora` | Momento da captura |
+| `sessao` | Identificador do boot e da execução do script de captura |
+| `repeticao` | Repetição do benchmark dentro da sessão |
+| `cenario` | Tipo de cenário testado |
+| `distancia_m` | Distância entre as placas |
+| `obstaculo` | Condição de barreira |
+| `observacoes` | Informações adicionais da montagem ou execução |
+
+`sessao` e `repeticao` são campos diferentes. Uma sessão corresponde a um boot; uma mesma sessão pode conter várias repetições do benchmark.
+
+## Análise dos resultados
+
+O script [`ferramentas/analisar_resultados.py`](./ferramentas/analisar_resultados.py) lê os CSVs em `resultados/`, ignora `template.csv` e subpastas, imprime o resumo estatístico e gera gráficos em `resultados/graficos/`.
+
+```bash
+pip install matplotlib
+python3 ferramentas/analisar_resultados.py
+python3 ferramentas/analisar_resultados.py --sem-graficos
+```
+
+O resumo apresenta:
+
+1. Resultados por tecnologia e cenário para todos os payloads.
+2. Comparação entre tecnologias usando apenas o conjunto de payloads comum a todas.
+3. Custo de memória por tecnologia.
+
+Não compare diretamente médias calculadas sobre listas diferentes de payloads. Para comparação entre tecnologias, use o núcleo comum calculado pelo script.
+
+### Gráficos gerados
+
+| Arquivo | Conteúdo |
+|---|---|
+| `rtt_16bytes.png` | RTT médio para payload de 16 bytes |
+| `comparativo_baseline.png` | RTT médio no baseline usando payloads comuns |
+| `jitter_16bytes_baseline.png` | Desvio padrão do RTT no baseline, 16 bytes |
+| `rtt_vs_distancia.png` | RTT médio por distância, com p95 como barra de erro |
+| `perda_vs_distancia.png` | Perda por distância |
+| `pdr_por_condicao_16bytes.png` | PDR por distância e obstáculo, 16 bytes |
+| `pdr_vs_rssi.png` | PDR em função do RSSI |
+| `throughput_vs_payload.png` | Goodput por payload no baseline |
+| `link_setup_por_tecnologia.png` | Tempo de estabelecimento do enlace |
+| `memoria_por_tecnologia.png` | Custo de memória do rádio e do enlace |
+
+Nos gráficos de distância e PDR, o payload de referência é 16 bytes. Os gráficos de distância usam cenários sem obstáculo, enquanto as barreiras são analisadas separadamente. O gráfico de goodput usa apenas o cenário `baseline`.
 
 ## Estrutura de pastas
 
 ```text
 desempenho/
-├── readme.md              este arquivo
+├── readme.md
+├── como-rodar.md
 ├── wifi/
-│   ├── estacao_a.ino       SoftAP + UDP, iniciadora
-│   └── estacao_b.ino       Station + UDP, respondedora (echo)
+│   ├── estacao_a/
+│   └── estacao_b/
 ├── espnow/
-│   ├── estacao_a.ino       broadcast ESP-NOW, iniciadora
-│   └── estacao_b.ino       broadcast ESP-NOW, respondedora (echo)
+│   ├── estacao_a/
+│   └── estacao_b/
 ├── ble/
-│   ├── estacao_a.ino       central/cliente GATT, iniciadora
-│   └── estacao_b.ino       peripheral/servidor GATT, respondedora (echo)
+│   ├── estacao_a/
+│   └── estacao_b/
 ├── zigbee/
-│   ├── estacao_a.ino       coordinator, iniciadora do benchmark
-│   └── estacao_b.ino       end device, respondedora (echo)
+│   ├── estacao_a/
+│   └── estacao_b/
+├── ferramentas/
+│   ├── capturar_serial.py
+│   └── analisar_resultados.py
 └── resultados/
-    └── template.csv        modelo de planilha para consolidar os RESULT
+    ├── template.csv
+    ├── descartados/
+    └── graficos/
 ```
+
+Os sketches ficam em subpastas com o mesmo nome do arquivo, conforme exigido pelo Arduino IDE.
 
 ## Solução de problemas
 
-- **Porta serial não aparece.** Troque o cabo USB-C (muitos são só de
-  carga). A XIAO ESP32-C6 usa o USB nativo do próprio chip, então não deve
-  precisar de driver extra em Linux/macOS.
-- **Wi-Fi: B nunca conecta.** Confirme que `WIFI_SSID`/`WIFI_PASSWORD` em
-  `estacao_a.ino` e `estacao_b.ino` são idênticos. A senha precisa ter pelo
-  menos 8 caracteres (exigência do WPA2).
-- **BLE: "Service not found" / "Characteristics not found".** Confirme que
-  `DEVICE_NAME` é idêntico nos dois arquivos. Se A conectar no dispositivo
-  errado (outra dupla testando por perto), mude o nome nos dois arquivos
-  (ex.: `XIAO-PERF-B-2`).
-- **BLE: payloads grandes são pulados ("Skipping payload...").** A MTU
-  negociada ficou menor que o payload testado. Confira no Monitor Serial de
-  A a linha "Negotiated MTU" logo após conectar.
-- **ESP-NOW ou Wi-Fi: pings de outra dupla aparecendo nos resultados /
-  timeouts estranhos com várias bancadas ligadas.** Mude `TEAM_ID` (ESP-NOW)
-  ou o número final de `WIFI_SSID` (Wi-Fi) nos dois arquivos da dupla -
-  todas as duplas da sala precisam usar valores diferentes.
-- **Zigbee: A fica preso em "Waiting for Station B...".** Confirme
-  `Erase All Flash Before Sketch Upload: Enabled` nas duas placas antes de
-  gravar (mesma pegadinha já documentada em
-  [`../com-zigbee/readme.md`](../com-zigbee/readme.md)) e religue as duas
-  placas juntas.
-- **Resultados inconsistentes entre repetições do mesmo cenário.** Rode pelo
-  menos 3 repetições por cenário e compare a média - RF sofre variação
-  natural (reflexos, outras redes 2,4 GHz por perto, até pessoas se
-  movendo no ambiente).
+| Sintoma | Verificação |
+|---|---|
+| Porta serial não aparece | Verifique se o cabo USB-C possui linha de dados |
+| `[Errno 16] Device or resource busy` | Feche o Monitor Serial. Use `fuser -v /dev/ttyACM0` para identificar o processo que está usando a porta |
+| Conectou, mas não aparece saída | Pressione **RESET** ou envie `r` + Enter |
+| Muitos `TIMEOUT` a 1 m | Verifique se a estação B está ligada e com alimentação estável |
+| Wi-Fi parado em `Waiting for Station B (HELLO)...` | Confirme `WIFI_SSID` e `WIFI_PASSWORD` iguais nas duas estações. A senha deve ter pelo menos 8 caracteres |
+| BLE: `Service not found` | Confirme `DEVICE_NAME` igual nas duas estações. Se houver outra dupla próxima, use outro nome |
+| BLE: `Skipping payload...` | A MTU negociada ficou em 23. Reinicie as placas. O teste com 16 bytes continua válido |
+| Zigbee parado em `Waiting for Station B...` | Use `Erase All Flash Before Sketch Upload: Enabled` nas duas placas e reinicie ambas |
+| Pacotes de outra dupla aparecem | Altere `TEAM_ID`, `WIFI_SSID` ou `DEVICE_NAME`, conforme a tecnologia |
+| Resultados variam entre repetições | Variações são esperadas em RF. Use as 5 repetições previstas no protocolo e analise a distribuição das medições |
 
 ## Referências
 
-- [Seeed Studio - XIAO ESP32-C6 (documentação oficial)](https://wiki.seeedstudio.com/pt-br/xiao_esp32c6_getting_started/)
-- [Espressif - Arduino core para ESP32 (`arduino-esp32`)](https://github.com/espressif/arduino-esp32)
-- [Espressif - Documentação do ESP-NOW](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/network/esp_now.html)
-- [Estudo anterior deste repositório: comunicação Zigbee entre duas XIAO](../com-zigbee/)
+- [Seeed Studio - XIAO ESP32-C6](https://wiki.seeedstudio.com/pt-br/xiao_esp32c6_getting_started/)
+- [Espressif - Arduino core para ESP32](https://github.com/espressif/arduino-esp32)
+- [Espressif - ESP-NOW](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/network/esp_now.html)
+- [Estudo anterior: comunicação Zigbee entre duas XIAO](../com-zigbee/)

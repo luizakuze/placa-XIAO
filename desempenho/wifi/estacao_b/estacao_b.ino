@@ -28,12 +28,39 @@ WiFiUDP udp;
 constexpr uint8_t TYPE_HELLO = 0x01;
 constexpr uint8_t TYPE_DATA = 0x02;
 
-constexpr size_t MAX_PACKET_SIZE = 1200;
+constexpr size_t MAX_PACKET_SIZE = 9 + 1200;
 
 uint8_t rxBuf[MAX_PACKET_SIZE];
 
 bool everReceivedData = false;
 unsigned long lastHelloMs = 0;
+unsigned long lastDataMs = 0;
+
+// Depois de quanto tempo sem receber nada da estacao A a estacao B volta
+// a se anunciar.
+//
+// A estacao A reinicia toda vez que o script de captura abre a porta
+// serial, e ao reiniciar ela esquece o IP/porta da estacao B. Sem este
+// timeout, a B - que ja recebeu dados na sessao anterior - nunca mais
+// mandaria um HELLO, e as duas ficariam esperando uma pela outra. Era o
+// que inflava o LINKSETUP do Wi-Fi para dezenas de segundos, medindo o
+// tempo de um impasse em vez do tempo de associacao.
+//
+// Folgado o bastante para nao disparar entre os lotes de payload do
+// benchmark, separados por 200 ms.
+constexpr unsigned long DATA_SILENCE_MS = 5000;
+
+// Quantas vezes o HELLO e ecoado no Monitor Serial. O pacote continua
+// saindo a cada segundo ate a estacao A responder - so o print para.
+//
+// Isso importa quando a porta USB da estacao B esta enumerada mas
+// ninguem esta lendo (o caso tipico: as duas placas num hub, com o
+// script de captura ligado so na estacao A). Nessa situacao o driver
+// USB CDC do ESP32 bloqueia ate ~2 s por Serial.println esperando o
+// host esvaziar o buffer (20 tentativas de 100 ms, ver HWCDC.cpp), e
+// a estacao B fica lenta demais para responder os pings em tempo.
+constexpr uint8_t MAX_HELLO_PRINTS = 3;
+uint8_t helloPrints = 0;
 
 // ------------------------------------------------------------
 // Anuncia esta estacao para a A ate receber o primeiro pacote
@@ -47,7 +74,10 @@ void sendHello() {
   udp.write(&helloByte, 1);
   udp.endPacket();
 
-  Serial.println("HELLO -> Station A");
+  if (helloPrints < MAX_HELLO_PRINTS) {
+    helloPrints++;
+    Serial.println("HELLO -> Station A");
+  }
 }
 
 // ------------------------------------------------------------
@@ -80,6 +110,11 @@ void setup() {
 // ------------------------------------------------------------
 
 void loop() {
+  // A estacao A sumiu (tipicamente porque reiniciou): volta a se anunciar.
+  if (everReceivedData && millis() - lastDataMs >= DATA_SILENCE_MS) {
+    everReceivedData = false;
+  }
+
   if (!everReceivedData && millis() - lastHelloMs >= 1000) {
     sendHello();
     lastHelloMs = millis();
@@ -92,6 +127,7 @@ void loop() {
 
     if (len > 0 && rxBuf[0] == TYPE_DATA) {
       everReceivedData = true;
+      lastDataMs = millis();
 
       IPAddress remoteIp = udp.remoteIP();
       uint16_t remotePort = udp.remotePort();

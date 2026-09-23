@@ -20,9 +20,10 @@ constexpr uint8_t BROADCAST_ADDR[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 // -------------------- Protocolo --------------------
 
+constexpr uint8_t TYPE_HELLO = 0x01;
 constexpr uint8_t TYPE_DATA = 0x02;
 constexpr size_t HEADER_SIZE = 10;
-constexpr size_t MAX_PACKET_SIZE = 200;
+constexpr size_t MAX_PACKET_SIZE = HEADER_SIZE + 200;
 
 // -------------------- Buffers compartilhados com o callback --------------------
 
@@ -104,7 +105,11 @@ void loop() {
     rxFlag = false;
     int len = rxLen;
 
-    if (len >= (int)HEADER_SIZE && rxBuf[1] == TYPE_DATA) {
+    if (len >= 2 && rxBuf[1] == TYPE_HELLO) {
+      // Eco curto usado apenas para medir quando o enlace realmente ficou
+      // utilizavel ponta a ponta. Nao entra nas estatisticas do benchmark.
+      esp_now_send(BROADCAST_ADDR, rxBuf, len);
+    } else if (len >= (int)HEADER_SIZE && rxBuf[1] == TYPE_DATA) {
       if (!everReceivedData) {
         everReceivedData = true;
         Serial.println("Station A found. Echoing pings...");
