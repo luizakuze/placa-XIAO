@@ -10,6 +10,10 @@ A proposta envolve a representação de componentes de um sistema de comunicaç�
 
 Com isso, pretende-se apresentar conceitos básicos de Telecomunicações de forma prática e experimental, aproximando estudantes do ensino fundamental e médio das tecnologias encontradas na área.
 
+## Primeiros passos
+
+- [Introdução à XIAO ESP32-C6: especificação, instalação e roteiros básicos](./introducao/)
+
 ## Estudos realizados
 
 - [Comunicação básica com Zigbee entre duas placas XIAO e interação](./com-zigbee/)
