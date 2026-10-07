@@ -113,7 +113,7 @@ Depois do Blink de teste, siga estes três roteiros, nesta ordem:
 | [`roteiro-02-leitura-analogica/`](./roteiro-02-leitura-analogica/) | Lê um potenciômetro/sensor e mostra o valor no Monitor Serial | `analogRead`, `Serial` |
 | [`roteiro-03-botao-led/`](./roteiro-03-botao-led/) | Um botão externo liga/desliga um LED externo | `digitalRead`, entrada/saída digital |
 
-Cada pasta tem o `.ino` com as instruções de montagem no comentário do próprio código.
+Cada pasta tem um `readme.md` com material, montagem, como rodar e o que se espera, além do `.ino` com o código.
 
 ## Para onde ir depois
 
